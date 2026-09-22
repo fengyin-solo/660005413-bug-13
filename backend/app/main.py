@@ -64,6 +64,30 @@ LOG_TEMPLATES = {
 }
 
 
+def normalize_level(level):
+    level_name = str(level or "").strip().lower()
+    aliases = {
+        "warning": "WARN",
+        "warn": "WARN",
+        "err": "ERROR",
+        "error": "ERROR",
+        "info": "INFO",
+        "information": "INFO",
+        "notice": "INFO",
+        "debug": "DEBUG",
+        "trace": "DEBUG",
+    }
+    return aliases.get(level_name, level_name.upper() if level_name else "UNKNOWN")
+
+
+def normalize_log_entry(log):
+    normalized = dict(log)
+    level = normalize_level(log.get("level"))
+    normalized["level"] = level
+    normalized["raw"] = f"[{log.get('timestamp', '')}] [{level}] [{log.get('source', '')}] {log.get('message', '')}"
+    return normalized
+
+
 class GenerateRequest(BaseModel):
     type: str = "nginx"
     count: int = 1000
@@ -81,13 +105,14 @@ def generate_logs(req: GenerateRequest):
     logs = []
     for i in range(req.count):
         entry = tmpl["generator"]()
+        level = normalize_level(entry["level"])
         logs.append({
             "id": i + 1,
             "timestamp": entry["timestamp"],
-            "level": entry["level"],
+            "level": level,
             "source": entry["source"],
             "message": entry["message"],
-            "raw": f"[{entry['timestamp']}] [{entry['level']}] [{entry['source']}] {entry['message']}"
+            "raw": f"[{entry['timestamp']}] [{level}] [{entry['source']}] {entry['message']}"
         })
     return analyze_logs(logs, [], "")
 
@@ -98,16 +123,16 @@ def detect_anomalies(req: DetectRequest):
 
 
 def analyze_logs(logs_data, rules, query):
-    logs = logs_data
+    logs = [normalize_log_entry(log if isinstance(log, dict) else {}) for log in logs_data]
     n = len(logs)
 
-    # Time windows (1min each for demonstration)
+    # Time windows (20 logs each for demonstration)
     window_size = 20
     windows = []
     for i in range(0, n, window_size):
         chunk = logs[i:i + window_size]
-        levels = Counter(l["level"] for l in chunk)
-        sources = Counter(l["source"] for l in chunk)
+        levels = Counter(log["level"] for log in chunk)
+        sources = Counter(log["source"] for log in chunk)
         windows.append({
             "start": i, "end": min(i + window_size, n),
             "count": len(chunk),
@@ -179,7 +204,7 @@ def analyze_logs(logs_data, rules, query):
             })
 
     return {
-        "logs": logs[:200],
+        "logs": logs,
         "windows": windows,
         "anomalies": anomalies,
         "alerts": alerts[:20],
